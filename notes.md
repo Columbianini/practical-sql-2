@@ -114,3 +114,175 @@ DROP TABLE supervisor_salaries_temp
     - INTERSECT
     - EXCEPT
 
+# Chapter 8 Table Design that works for you
+- Naming Convention
+    - use plural noun for table names
+    - use snake name
+- Constraints
+    - 2 types:
+        - table constraint
+            - `CONSTRAINT {constraint_name} {SQL CONSTRAINT KEYWORD} [table_name](column, [,..])`
+        - column constraint
+    - tips
+        - use GENERATED ALWAYS AS IDENTITY keyword to a column so that the column 1) does not need to insert value 2) will auto insert value   
+        ```sql
+        <!-- OVERRIDE IDENTITY COLUMN -->
+        INSERT INTO surrogate_key_example 
+        OVERRIDING SYSTEM VALUE 
+        VALUES (4, 'Chicken Coop', '2021-09-03 10:33-07'); 
+        
+        <!-- OVERRIDE IDENTITY COLUMN START NUMBER -->
+        ALTER TABLE surrogate_key_example ALTER COLUMN order_number 
+        RESTART WITH 5; 
+        
+        <!-- NORMAL USE -->
+        INSERT INTO surrogate_key_example (product_name, order_time) 
+        VALUES ('Aloe Plant', '2020-03-15 10:09-07');
+        ```
+    - several constraints
+        - PRIMARY KEY
+        - FOREIGN KEY: when you add foreign key, the primary key it references must exist in the reference table. when you delete primary key, you also need to delete all its corresponding foreign keys. (use ON DELETE CASCADE to do so)
+        ```sql
+         CREATE TABLE licenses ( 
+            license_id text, 
+            first_name text, 
+            last_name text, 
+         CONSTRAINT licenses_key PRIMARY KEY (license_id) 
+        ); 
+        <!-- Deleting a row in licenses should also delete all related rows in -->
+        <!-- registrations. This allows us to delete a driver’s license without first -->
+        <!-- having to manually remove any registrations linked to it. It also maintains -->
+        <!-- data integrity by ensuring deleting a license doesn’t leave orphaned rows in -->
+        <!-- registrations -->
+        CREATE TABLE registrations ( 
+            registration_id text, 
+            registration_date timestamp with time zone, 
+            license_id text REFERENCES licenses (license_id) ON DELETE CASCADE, 
+            CONSTRAINT registration_key PRIMARY KEY (registration_id, 
+        license_id) 
+        ); 
+        ```
+        - CHECK
+        ```sql
+        CREATE TABLE check_constraint_example ( 
+            user_id bigint GENERATED ALWAYS AS IDENTITY, 
+            user_role text, 
+            salary numeric(10,2), 
+            CONSTRAINT user_id_key PRIMARY KEY (user_id), 
+            CONSTRAINT check_role_in_list CHECK (user_role IN('Admin', 
+        'Staff')), 
+            CONSTRAINT check_salary_not_below_zero CHECK (salary >= 0 AND salary<=1000000000>) 
+        );
+        ```
+        - UNIQUE: compared to PRIMARY KEY, UNIQUE column can accept NULL
+        - NOT NULL
+    - ADD OR REMOVE constraints
+    ```sql
+    ALTER TABLE not_null_example DROP CONSTRAINT student_id_key; 
+    ALTER TABLE not_null_example ADD CONSTRAINT student_id_key PRIMARY KEY (student_id); 
+    ALTER TABLE not_null_example ALTER COLUMN first_name DROP NOT NULL; 
+    ALTER TABLE not_null_example ALTER COLUMN first_name SET NOT NULL;
+    ```
+- (B-tree) index: can be applied to multiple columns. a seperate data structure that the database manages
+    - how to add?
+        - `PRIMARY KEY` or `UNIQUE` will auto create index
+        - `CREATE INDEX {index name} ON {table_name} ({column_name}[,...])`
+    - useful for data that can be ordered and searched using equality and range and LIKE if there is no wildcard at the beginning of the string (e.g. `WHERE chips LIKE 'Dorito%'`)
+    ```sql
+    -- Listing 8-13: Benchmark queries for index performance using EXPLAIN ANALYZE
+    EXPLAIN ANALYZE SELECT * FROM new_york_addresses
+    WHERE street = 'BROADWAY';
+
+    CREATE INDEX street_idx ON new_york_addresses (street);
+    DROP INDEX street_idx;
+    ```
+    - what columns to use?
+        - Foreign Keys (speed up join and delete cascade)
+        - columns you’ll use in table joins
+        - Add indexes to columns that will frequently end up in a query WHERE clause.
+ 
+ # Chapter 9 Extracting Information By Group and Summarizing
+ - count
+    - count(*): return row numbers, **include NULL**
+    - count({colname}): return **NOT NULL** values in a column
+    - count(DISTINCT {colname}): return **distinct NOT NULL values** in a column
+- GROUP BY (== DISTINCT)
+- tips:
+    - first `WHERE` then `JOIN` then `GROUP BY` then `SELECT` then `ORDER BY`
+- HAVING Vs WHERE
+    - aggregate functions, such as sum(), can’t be used within a WHERE clause because they operate at the row level, and aggregate functions work across rows. The HAVING clause places conditions on groups created by aggregating
+    - **HAVING wil filter out the whole group rather than some records**
+
+# Chapter 10 Inspecting and Modifying Data
+- Data interview, e.g. (use GROUP BY)
+    - missing data
+    - misspelling data
+- Modify Table, Column and Data
+    - command 1: start with `ALTER TABLE`, then paired with `ADD COLUMN`, `ALTER COLUMN`, `DROP COLUMN`
+    ```sql
+    ALTER TABLE table ADD COLUMN column data_type;
+    ALTER TABLE table DROP COLUMN column;
+    ALTER TABLE table ALTER COLUMN column SET DATA TYPE data_type;
+    ALTER TABLE table ALTER COLUMN column SET NOT NULL;
+    ALTER TABLE table ALTER COLUMN column DROP NOT NULL;
+    ```
+    - command 2: start with `UPDATE`, then paired with `WHERE`
+    ```sql
+    -- set value could be column_name 
+    UPDATE table 
+    SET column_a = value_a, column_b = value_b 
+    WHERE criteria;
+
+    -- DO NOT UNDERSTAND: UPDATE table 
+    UPDATE table 
+    SET column = (SELECT column 
+                  FROM table_b 
+                  WHERE table.column = table_b.column) 
+    WHERE EXISTS (SELECT column 
+                  FROM table_b 
+                  WHERE table.column = table_b.column);
+    
+    ALTER TABLE meat_POULTRY_EGG_ESTABLISHMENTS
+    ADD COLUMN inspection_deadline timestamp with time zone
+
+    -- WHERE EXISTS and WHERE here is like join, help to update the value across tables    
+    UPDATE meat_poultry_egg_establishments establishments
+    SET inspection_deadline = '2022-12-01 00:00 EST'
+    WHERE EXISTS (SELECT state_regions.region FROM state_regions WHERE establishments.st = state_regions.st AND state_regions.region='NEW ENGLAND');
+
+    ```
+    - Viewing Modified Data with RETURNING, can be paired with `UPDATE`, `INSERT`, `DELETE FROM`
+    ```sql
+    UPDATE table 
+    SET column_a = value 
+    RETURNING column_a, column_b, column_c;
+    ```
+    - Create backup tables:  Indexes are not copied when creating a table backup using the
+    CREATE TABLE statement. If you decide to run queries on the backup, be sure to create a separate index on that table.
+    ```sql
+    CREATE TABLE meat_poultry_egg_establishments_backup AS SELECT * FROM meat_poultry_egg_establishments;
+    ```
+    - tips:
+        - `IS DISTINCT FROM`(treat NULL as known and will only return true/false) Vs `<>` (a comparison that includes a NULL will return NULL)
+- Delete data
+    - can delete table/database/rows/columns
+        - rows: `DELETE FROM table_name WHERE expressions;` or `TRUNCATE table_name RESTART IDENTITY`
+        - columns: `ALTER TABLE table_name DROP COLUMN column_name`
+        - table: `DROP TABLE table_name`
+- Use [transaction](https://www.postgresql.org/docs/current/tutorial-transactions.html) to save or revert changes (atomic operation)
+    - you can run by step inside the transaction block, but none of your changes will be visible to other database until you commit or rollback
+    ```sql
+    START TRANSACTION
+    UPDATE meat_poultry_egg_establishments
+    SET company='ARGO Merchants Oakland LLC'
+    WHERE company='ARGP Merchants Oakland, LLC';
+
+    SELECT company
+    FROM meat_poultry_egg_establishments
+    WHERE company LIKE 'ARGP%'
+    ORDER BY company;
+    ROLLBACK;
+    ```
+- Improving performance when updating large tables
+    - when you add new columns, you should copy to a new table and rename the table; if you only add column, then it will create a new version of existing row each time a value is updated, but it does not delete the old version, thus the table size will increase (FIXME: confusing)
+
