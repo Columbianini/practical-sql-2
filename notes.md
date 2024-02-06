@@ -286,3 +286,9 @@ DROP TABLE supervisor_salaries_temp
 - Improving performance when updating large tables
     - when you add new columns, you should copy to a new table and rename the table; if you only add column, then it will create a new version of existing row each time a value is updated, but it does not delete the old version, thus the table size will increase (FIXME: confusing)
 
+# Statistical functions in SQL
+- corr, regr_slope, regr_intercept, regr_r2, var_pop, var_samp, stddev_pop, stddev_samp
+- window functions: perform calculations across a set of rows relative to current row
+    - rank: generate gap when tie
+    - dense_rank: no gap when tie
+    
