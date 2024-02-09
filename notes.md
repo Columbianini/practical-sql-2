@@ -395,3 +395,117 @@ END
 
 -- Without an ELSE clause, the statement would return a NULL when no conditions are true
 ```
+
+# Chapter 14 Mining Text to find meaning data
+- `WHERE ~*`: where case insensitive regex filter; `WHERE ~`: where case sensitive regex filter; `WHERE !~*`: where case insensitive regex anti-filter 
+- regex expression: extract data from each row, `regexp_match(colname, regex_pattern)`
+```sql
+UPDATE crime_reports
+SET date_1 = 
+    (
+      (regexp_match(original_text, '\d{1,2}\/\d{1,2}\/\d{2}'))[1]
+          || ' ' ||
+      (regexp_match(original_text, '\/\d{2}\n(\d{4})'))[1] 
+          ||' US/Eastern'
+    )::timestamptz,
+             
+    date_2 = 
+    CASE 
+    -- if there is no second date but there is a second hour
+        WHEN (SELECT regexp_match(original_text, '-(\d{1,2}\/\d{1,2}\/\d{2})') IS NULL)
+                     AND (SELECT regexp_match(original_text, '\/\d{2}\n\d{4}-(\d{4})') IS NOT NULL)
+        THEN 
+          ((regexp_match(original_text, '\d{1,2}\/\d{1,2}\/\d{2}'))[1]
+              || ' ' ||
+          (regexp_match(original_text, '\/\d{2}\n\d{4}-(\d{4})'))[1] 
+              ||' US/Eastern'
+          )::timestamptz 
+
+    -- if there is both a second date and second hour
+        WHEN (SELECT regexp_match(original_text, '-(\d{1,2}\/\d{1,2}\/\d{2})') IS NOT NULL)
+              AND (SELECT regexp_match(original_text, '\/\d{2}\n\d{4}-(\d{4})') IS NOT NULL)
+        THEN 
+          ((regexp_match(original_text, '-(\d{1,2}\/\d{1,2}\/\d{2})'))[1]
+              || ' ' ||
+          (regexp_match(original_text, '\/\d{2}\n\d{4}-(\d{4})'))[1] 
+              ||' US/Eastern'
+          )::timestamptz 
+    END,
+    street = (regexp_match(original_text, 'hrs.\n(\d+ .+(?:Sq.|Plz.|Dr.|Ter.|Rd.))'))[1],
+    city = (regexp_match(original_text,
+                           '(?:Sq.|Plz.|Dr.|Ter.|Rd.)\n(\w+ \w+|\w+)\n'))[1],
+    crime_type = (regexp_match(original_text, '\n(?:\w+ \w+|\w+)\n(.*):'))[1],
+    description = (regexp_match(original_text, ':\s(.+)(?:C0|SO)'))[1],
+    case_number = (regexp_match(original_text, '(?:C0|SO)[0-9]+'))[1];
+```
+- full-text search in postgresql
+    - text search data types: you will use `tsquery` to search `tsvector`
+        - `tsvector`: represents the text to be searched and stored in a sorted list of *lexemes*(linguistic unit in a given language, a.k.a word root).
+            - For example, a tsvector type column would store the words washes, washed, and washing as the lexeme wash while noting each word’s position in the original text.
+            - converting text to tsvector `to_tsvector(language, string)` also moves *stop word*, e.g. the or it
+            - use gin index on tsvector column
+            ```sql
+            CREATE INDEX search_idx ON president_speeches USING gin(search_speech_text);
+            ```
+        - `tsquery`: converting text to tsquery `to_tsquery(language, string)`, represents the search query terms and operators 
+        - how to use `tsquery` to search `tsvector`
+            - filter tsquery: `tsvector @@ ts_query` (tsvector include tsquery)
+            ```sql
+            SELECT president, speech_date 
+            FROM president_speeches 
+            WHERE search_speech_text @@ to_tsquery('english', 'Vietnam') 
+            ORDER BY speech_date;
+            ```
+
+            - show search result location: `ts_headline(string column not the tsquery column, tsquery, option)`
+            ```sql
+            -- options: enclose the matched word with "<>", display 5~7 words, and show max 1 match
+            SELECT president, 
+            speech_date, 
+	        ts_headline(speech_text, to_tsquery('english', 'tax'), 
+				   'StartSel = <, 
+                    StopSel = >, 
+                    MinWords=5, 
+                    MaxWords=7, 
+                    MaxFragments=1') 
+            FROM president_speeches 
+            WHERE search_speech_text @@ to_tsquery('english', 'tax') 
+            ORDER BY speech_date;
+            ```
+            - find consecutive words <n>
+            ```sql
+            -- find pattern(defense after 1-1=0 word is military)
+            --  If you changed the query terms to military <2> defense, the database would return matches where the terms are exactly two words apart, as in the phrase “our military and defense commitments.”
+            SELECT president, 
+            speech_date, 
+            ts_headline(speech_text, 
+                   to_tsquery('english', 'military <1> defense'), 
+                   'StartSel = <, 
+                    StopSel = >, 
+                    MinWords=5, 
+                    MaxWords=7, 
+                    MaxFragments=1') 
+            FROM president_speeches 
+            WHERE search_speech_text @@ 
+                  to_tsquery('english', 'military <1> defense') 
+            ORDER BY speech_date;
+            ```
+
+            - rank on how often the lexemes you’re searching for appear in the text (can be normalized by dividing the sentence length)
+            ```sql
+            -- ts_rank(tsvector, tsquery[,2]): consider frequencies only, optional with consideration of length of sentence
+            -- ts_rank_cd(tsvector, tsquery[,2]): consider frequencies, density only, optional with consideration of length of sentence
+            SELECT president,
+            speech_date,
+            ts_rank(search_speech_text,
+               to_tsquery('english', 'war & security & threat & enemy'))
+               AS score
+            FROM president_speeches
+            WHERE search_speech_text @@ 
+                  to_tsquery('english', 'war & security & threat & enemy')
+            ORDER BY score DESC
+            LIMIT 5;
+            ```
+
+            
+
