@@ -443,7 +443,7 @@ SET date_1 =
         - `tsvector`: represents the text to be searched and stored in a sorted list of *lexemes*(linguistic unit in a given language, a.k.a word root).
             - For example, a tsvector type column would store the words washes, washed, and washing as the lexeme wash while noting each word’s position in the original text.
             - converting text to tsvector `to_tsvector(language, string)` also moves *stop word*, e.g. the or it
-            - use gin index on tsvector column
+            - use `GIN` index on `tsvector` column
             ```sql
             CREATE INDEX search_idx ON president_speeches USING gin(search_speech_text);
             ```
@@ -507,5 +507,83 @@ SET date_1 =
             LIMIT 5;
             ```
 
-            
+# Chapter 16 Working with JSON data
+- JSON: comprises 2 data structure that could be permutated together
+    - **object**: an unordered set of name/value pairs delimited by comma 
+    - **array**: an ordered collection of values (values could be **object**)
+- Data types: both allow insertion of valid JSON-only text (enclosed by curly brackets, common seperating objects, proper quoting of keys)
+    - json: slow, used only for duplicate keys and preserving the order of keys
+    - jsonb: [recommended]much much faster, preserve only the last key/value pair for duplicate keys, order of keys are not preserved, 
+    ```sql
+    -- import json
+     CREATE TABLE films ( 
+        id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, 
+        film jsonb NOT NULL 
+    ); 
+    COPY films (film) 
+    FROM C:\YourDirectory\films.json'; 
+    CREATE INDEX idx_film ON films USING GIN (film);
+    ```
+- Extraction
+    - key/value extraction: ->key returns jsonb / ->>key returns text
+    - array element extraction:  ->integer returns jsonb / -->integer returns text
+    - path extraction
+        - path: a series of keys or array indices that lead to the location of a value. #> '{key/integer[,key/integer]}' returns jsonb, #>> '{key/integer[,key/integer]}' returns text
+        ```sql
+        SELECT id, film #> '{characters, 0, name}' AS name 
+        FROM films 
+        ORDER BY id; 
+        SELECT id, film #>> '{characters, 0, name}' AS name 
+        FROM films 
+        ORDER BY id;
+        ```
+- Containment: jsonb @> jsonb (or `{key:value}::jsonb`) returns boolean
+    ```sql
+    SELECT id, film ->> 'title' AS title, 
+       film @> '{"title": "The Incredibles"}'::jsonb AS is_incredible 
+    FROM films 
+    ORDER BY id;
+    ```
+- Existence: jsonb [? text | ?| text[] | ?& text[]], whether jsonb includes key text, include any of text[], include all keys
+- Convert to json: turn a normal table into a table with one column consisting of json lines using `to_json(table_name)` and then turn a table with one column consisting of json lines to one json line using `json_agg(table)`
+    ```sql
+    -- normal table to json table
+    SELECT to_json(employees) AS json_rows 
+    FROM ( 
+    SELECT emp_id, last_name AS ln2 FROM employees 
+    ) AS employees;
 
+    -- json table to json string
+    SELECT json_agg(to_json(employees)) AS json_rows 
+    FROM ( 
+    SELECT emp_id, last_name AS ln2 FROM employees 
+    ) AS employees;
+    ```
+- CRUD
+    ```sql
+    -- add
+    UPDATE films 
+    SET film = film || '{"studio": "Pixar"}'::jsonb 
+    WHERE film @> '{"title": "The Incredibles"}'::jsonb; 
+
+    -- update
+    UPDATE films 
+    SET film = jsonb_set(film, 
+                 '{genre}', 
+                  film #> '{genre}' || '["World War II"]',  
+                  true) 
+    WHERE film @> '{"title": "Cinema Paradiso"}'::jsonb;
+
+    -- delete key by -
+    UPDATE films 
+    SET film = film - 'studio' 
+    WHERE film @> '{"title": "The Incredibles"}'::jsonb; 
+    
+    -- delete element by using path operator #-
+    UPDATE films 
+    SET film = film #- '{genre, 2}' 
+    WHERE film @> '{"title": "Cinema Paradiso"}'::jsonb;
+    ```
+- 3 useful json processing function:
+    - `jsonb_array_length`: get the length of an array in json
+    - `jsonb_array_elements` or `jsonb_array_elements_text`: convert array elements into rows, with one row per element
