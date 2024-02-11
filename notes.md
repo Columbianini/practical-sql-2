@@ -587,3 +587,195 @@ SET date_1 =
 - 3 useful json processing function:
     - `jsonb_array_length`: get the length of an array in json
     - `jsonb_array_elements` or `jsonb_array_elements_text`: convert array elements into rows, with one row per element
+
+# Chapter 17 Saving time with VIEWS, FUNCTIONS and TRIGGERS
+- View: a stored query with a name that you can work with as if it were a table
+    - reusable view: Every time you access a standard view, the stored query runs and generates a **temporary** set of results
+        - if you’re replacing an existing view, the new query must generate the same column names with the same data types and in the same order as the one it’s replacing. You can add columns, but they must be placed at the end of the column list. If you try to do otherwise, the database will respond with an error message.
+        ```sql
+        CREATE OR REPLACE VIEW county_pop_change_2019_2010 AS
+            SELECT c2019.county_name,
+                   c2019.state_name,
+                   c2019.state_fips,
+                   c2019.county_fips,
+                   c2019.pop_est_2019 AS pop_2019,
+                   c2010.estimates_base_2010 AS pop_2010,
+                   round( (c2019.pop_est_2019::numeric - c2010.estimates_base_2010)
+                       / c2010.estimates_base_2010 * 100, 1 ) AS pct_change_2019_2010
+            FROM us_counties_pop_est_2019 AS c2019
+                JOIN us_counties_pop_est_2010 AS c2010
+            ON c2019.state_fips = c2010.state_fips
+                AND c2019.county_fips = c2010.county_fips;
+        ```
+        - you can limit access to CRUD by using non-materialized view
+        ```sql
+         CREATE OR REPLACE VIEW employees_tax_dept WITH (security_barrier) AS 
+            SELECT emp_id, 
+                   first_name, 
+                   last_name, 
+                   dept_id 
+            FROM employees 
+            WHERE dept_id = 1 
+            WITH LOCAL CHECK OPTION;
+        -- WITH (security_barrier): This enables a level of database security to prevent a malicious user from getting around restrictions that the view places on rows and columns (https://www.postgresql.org/docs/current/rules-privileges.html)
+        -- WITH LOCAL CHECK OPTION: restricts inserts per WHERE. in this case, it restricts the insertion's dept_id=1
+        ```
+
+    - materialized view: Every time you access a standard view, the **permanently** stored view shows. If update is needed, need to refresh it
+        - A good use for materialized views is to preprocess complex queries that take a while to run and make those results available for faster querying
+        ```sql
+        -- create materialzied view
+        CREATE MATERIALIZED VIEW nevada_counties_pop_2019 AS 
+            SELECT county_name, 
+                   state_fips, 
+                   county_fips, 
+                   pop_est_2019 
+            FROM us_counties_pop_est_2019 
+            WHERE state_name = 'Nevada';
+
+        -- refresh materialized view    
+        REFRESH MATERIALIZED VIEW nevada_counties_pop_2019;
+    ```
+- Functions / Procedures: can define by sql or precedual language such as PL/pgSQL or PL/Python, you can use pyAgent to schedule a procedure
+    ```sql
+    -- function
+    CREATE OR REPLACE FUNCTION percent_change(
+	    new_value numeric,
+	    old_value numeric,
+	    decimal_places integer DEFAULT 1
+    ) RETURNS numeric AS 
+    $$
+    SELECT round((new_value - old_value) / old_value * 100, decimal_places);
+    $$
+    LANGUAGE SQL
+    IMMUTABLE
+    RETURNS NULL ON NULL INPUT;
+
+    -- procedure
+    -- enclose procedure code in $$. BEGIN...END is like {...} in C#. RAISE NOTICE is like print
+    CREATE OR REPLACE PROCEDURE update_personal_days() AS 
+    $$
+    BEGIN
+    	UPDATE teachers 
+    	SET personal_days =
+    		CASE WHEN (now() - hire_date) >= '10 years'::interval
+    			AND (now() - hire_date) < '15 years'::interval
+    			THEN 4
+    		WHEN (now() - hire_date) >= '15 years'::interval
+    			AND (now()-hire_date) < '20 years'::interval
+    			THEN 5
+    		WHEN (now() - hire_date) >= '20 years'::interval
+    			AND (now() - hire_date) < '25 years'::interval
+    			THEN 6
+    		WHEN (now()-hire_date) >= '25 years'::interval 
+    			THEN 7
+    		ELSE 3
+    		END;
+    		RAISE NOTICE 'personal_days updates!';
+    END;
+    $$
+    LANGUAGE plpgsql;
+
+    CALL update_personal_days();
+
+    -- using Python
+    -- debug: plpython3.dll cannot load --> add C:\edb\languagepack\v2\Python-3.9 to PATH and create PYTHONHOME=C:\edb\languagepack\v2\Python-3.9 --> restart PC!! Do it otherwise would not work 😊
+    CREATE EXTENSION plpython3u;
+
+    CREATE OR REPLACE FUNCTION trim_county(input_string text) 
+    RETURNS text AS 
+    $$ 
+        import re
+        cleaned = re.sub(r' County', '', input_string) 
+        return cleaned 
+    $$ 
+    LANGUAGE plpython3u;
+
+    SELECT county_name, 
+       trim_county(county_name) 
+    FROM us_counties_pop_est_2019 
+    ORDER BY state_fips, county_fips 
+    LIMIT 5;
+    ```
+- Triggers: executes a function whenever a specified event, such as an INSERT, UPDATE, or DELETE, occurs on a table or a view. You can set a trigger to fire before, after, or instead of the event, and you can also set it to fire once for each row affected by the event or just once per operation. e.g. You could set the trigger to fire once for each of the 20 rows deleted or just one time
+    - add loggings **AFTER UPDATE**
+    ```sql
+    -- First, create trigger function
+    -- in the function. The first is the row values before they were changed, noted with the prefix OLD. The second is the row values after they were changed, noted with the prefix NEW. 
+    -- in the function, you need to RETURNS trigger and RETURNS NULL
+    CREATE OR REPLACE FUNCTION record_if_grade_changed() 
+    RETURNS trigger AS 
+    $$ 
+    BEGIN 
+      IF NEW.grade <> OLD.grade THEN 
+        INSERT INTO grades_history ( 
+            student_id, 
+            course_id, 
+            change_time, 
+            course, 
+            old_grade, 
+            new_grade) 
+        VALUES 
+            (OLD.student_id, 
+             OLD.course_id, 
+             now(), 
+             OLD.course, 
+      		 OLD.grade, 
+      		 NEW.grade); 
+      END IF; 
+      RETURN NULL; 
+     END; 
+    $$ 
+    LANGUAGE plpgsql;
+
+    -- Second, create trigger rule
+    CREATE TRIGGER grades_update
+	AFTER UPDATE ON grades
+	FOR EACH ROW 
+	EXECUTE PROCEDURE if_grade_changed();
+    ```
+    - update before inserting 
+    ```sql
+    -- plpython doc: https://www.postgresql.org/docs/current/plpython-trigger.html
+    CREATE OR REPLACE FUNCTION classify_max_temp()
+        RETURNS TRIGGER AS
+    $$
+        max_temp = TD["new"]["max_temp"]
+        if max_temp is not None:
+            if max_temp >= 90:
+                TD["new"]["max_temp_group"] = 'Hot'
+            elif 70 <= max_temp < 90:
+                TD["new"]["max_temp_group"] = 'Warm'
+            elif 50 <= max_temp < 70:
+                TD["new"]["max_temp_group"] = 'Pleasant'
+            elif 33 <= max_temp < 50:
+                TD["new"]["max_temp_group"] = 'Cold'
+            elif 20 <= max_temp < 33:
+                TD["new"]["max_temp_group"] = 'Frigid'
+            elif max_temp < 20:
+                TD["new"]["max_temp_group"] = 'Inhumane'
+            else:
+                TD["new"]["max_temp_group"] = 'No reading'
+        else:
+            TD["new"]["max_temp_group"] = 'No reading'
+        return "MODIFY"
+
+    $$ LANGUAGE plpython3u;
+
+    -- before insert add value for another column
+    CREATE TRIGGER temperature_insert 
+    BEFORE INSERT 
+      ON temperature_test 
+    FOR EACH ROW 
+    EXECUTE PROCEDURE classify_max_temp();
+
+    INSERT INTO temperature_test
+    VALUES
+        ('North Station', '1/19/2023', 10, -3),
+        ('North Station', '3/20/2023', 28, 19),
+        ('North Station', '5/2/2023', 65, 42),
+        ('North Station', '8/9/2023', 93, 74),
+        ('North Station', '12/14/2023', NULL, NULL);
+	
+    table temperature_test;
+    ```
