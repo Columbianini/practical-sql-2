@@ -779,3 +779,37 @@ SET date_1 =
 	
     table temperature_test;
     ```
+
+# Chapter 18 Command Line - psql
+- `psql -d database_name -U user_name -h host_domain`
+- useful [meta-commands](https://www.postgresql.org/docs/current/app-psql.html#APP-PSQL-META-COMMANDS) 
+    - `\dt`: show all table in a database
+    - `\du`: show all users
+    - `\dv`: show all views
+    - `\l`: show all databases
+    - `\dx`: show all extensions
+    - `\d table_name`: show table schema (columns)
+    - `\df`: show all functions
+    - `\c database_name`
+    - `\e` edit last query
+    - `\x`: extended view, show each row in a list
+
+- save password for connection to a database
+    -  enter `hostname:port:database:username:password` to `%APPDATA\postgresql\pgpass.conf`, e.g. ` localhost:5432:*:postgres:password`
+- 
+- save query output to a file
+    ```sql
+    -- open the file for appending query results below
+    \o 'C:/YourDirectory/query_output.csv'
+
+    query1
+    query2
+    query3
+
+    -- close the file, following queries will be output to console
+    \o
+    ```
+- read and execute sql stored in a file
+    ```sql
+     psql -d analysis -U postgres -f C:\YourDirectory\display-grades.sql
+    ```
