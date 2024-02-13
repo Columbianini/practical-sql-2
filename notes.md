@@ -813,3 +813,12 @@ SET date_1 =
     ```sql
      psql -d analysis -U postgres -f C:\YourDirectory\display-grades.sql
     ```
+
+# Chapter 19 Maintaining your database
+- check table size: `\dt+ table_name`; `SELECT pg_size_pretty(pg_total_relation_size('vacuum_test'));`
+    - for every updated value, PostgreSQL creates a new row, and the dead row remains in the table. Even though you see only 500,000 rows, the table has double that number
+    - `VACUUM table_name`(will tag the dead rows as places to be reused, but wont delete) Vs `VACUUM FULL table_name`(will delete the dead rows)
+- [statistic collector](https://www.postgresql.org/docs/current/monitoring-stats.html) (views that track database activilty and usage): `SELECT relname, last_vacuum, last_autovacuum, vacuum_count, autovacuum_count FROM pg_stat_all_tables WHERE relname='vacuum_test'`
+- Export and Import Database
+    - `pg_dump -d analysis -U [user_name] -Fc -v -f analysis_backup.dump`
+    - `pg_restore -C -d postgres -U postgres analysis_backup.dump`
